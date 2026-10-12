@@ -4,7 +4,7 @@ const canvasCtx = canvasElement.getContext('2d');
 const startBtn = document.getElementById('start-btn');
 const statusText = document.getElementById('status');
 
-// Mobile-optimized synth configuration
+// Tone.js Audio Synth setup
 const synth = new Tone.PolySynth(Tone.Synth, {
   oscillator: { type: "triangle" },
   envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 0.8 }
@@ -25,7 +25,7 @@ const CHORDS = {
 const chordNames = ["C", "G", "Am", "F", "D"];
 
 function onResults(results) {
-  // Ensure Canvas size matches Video dimensions dynamically
+  // Sync canvas size to video size dynamically
   if (videoElement.videoWidth && videoElement.videoHeight) {
     canvasElement.width = videoElement.videoWidth;
     canvasElement.height = videoElement.videoHeight;
@@ -39,7 +39,6 @@ function onResults(results) {
     let rightHand = null;
 
     results.multiHandedness.forEach((handedness, index) => {
-      // Handle camera mirroring
       if (handedness.label === "Left") {
         rightHand = results.multiHandLandmarks[index];
       } else {
@@ -47,7 +46,6 @@ function onResults(results) {
       }
     });
 
-    // Fallback if handedness detection is uncertain
     if (!leftHand && !rightHand && results.multiHandLandmarks.length > 0) {
       leftHand = results.multiHandLandmarks[0];
       if (results.multiHandLandmarks.length > 1) {
@@ -57,9 +55,8 @@ function onResults(results) {
 
     // 1. Left Hand - Select Chord
     if (leftHand) {
-      const indexTip = leftHand[8]; // Index fingertip
+      const indexTip = leftHand[8];
       
-      // Draw bright green tracking circle
       canvasCtx.fillStyle = '#00FF00';
       canvasCtx.beginPath();
       canvasCtx.arc(indexTip.x * canvasElement.width, indexTip.y * canvasElement.height, 16, 0, 2 * Math.PI);
@@ -69,11 +66,10 @@ function onResults(results) {
       currentChord = chordNames[Math.max(0, Math.min(chordNames.length - 1, chordIndex))];
     }
 
-    // 2. Right Hand - Strumming
+    // 2. Right Hand - Strum
     if (rightHand) {
       const indexTip = rightHand[8];
 
-      // Draw bright red tracking circle
       canvasCtx.fillStyle = '#FF0000';
       canvasCtx.beginPath();
       canvasCtx.arc(indexTip.x * canvasElement.width, indexTip.y * canvasElement.height, 16, 0, 2 * Math.PI);
@@ -84,7 +80,7 @@ function onResults(results) {
         
         if (Math.abs(speed) > 0.05 && isPlaying) {
           synth.triggerAttackRelease(CHORDS[currentChord], "2n");
-          statusText.innerText = "Chord Played: " + currentChord;
+          statusText.innerText = "Playing: " + currentChord;
         }
       }
       lastStrumY = indexTip.y;
@@ -99,9 +95,9 @@ function onResults(results) {
   canvasCtx.restore();
 }
 
-// Load MediaPipe Hands assets with fallback CDN
+// MediaPipe setup using stable CDN assets
 const hands = new Hands({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${file}`
+  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
 });
 
 hands.setOptions({
@@ -117,22 +113,37 @@ startBtn.addEventListener('click', async () => {
   try {
     await Tone.start();
     isPlaying = true;
-    statusText.innerText = "Connecting camera...";
+    statusText.innerText = "Starting Camera...";
 
-    const camera = new Camera(videoElement, {
-      onFrame: async () => {
-        await hands.send({ image: videoElement });
+    // 1. Get raw video stream directly from device
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: {
+        facingMode: "user",
+        width: { ideal: 640 },
+        height: { ideal: 480 }
       },
-      width: 640,
-      height: 480
+      audio: false
     });
 
-    await camera.start();
-    statusText.innerText = "Guitar Active! Move hand up/down for chord, strum to play.";
+    videoElement.srcObject = stream;
+    await videoElement.play();
+
+    // 2. Process video frames into MediaPipe continuously
+    async function processFrame() {
+      if (isPlaying) {
+        await hands.send({ image: videoElement });
+        requestAnimationFrame(processFrame);
+      }
+    }
+
+    statusText.innerText = "Guitar Active! Move hand for chord, strum to play.";
     startBtn.style.display = 'none';
+    
+    // Start processing frame loop
+    processFrame();
 
   } catch (err) {
     console.error(err);
-    statusText.innerText = "Camera Access Error. Please reload and allow permissions.";
+    statusText.innerText = "Camera Access Error. Please check permissions.";
   }
 });
