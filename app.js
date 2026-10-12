@@ -4,44 +4,82 @@ const canvasCtx = canvasElement.getContext('2d');
 const startBtn = document.getElementById('start-btn');
 const statusText = document.getElementById('status');
 
-// 1. Acoustic Guitar Sound Engine (Plucked Physical Modeling)
-const guitarPoly = new Tone.PolySynth(Tone.PluckSynth, {
-  attackNoise: 1.2,
-  dampening: 4000,
-  resonance: 0.96
-}).toDestination();
-
-// Add a slight room reverb for warm acoustic resonance
-const reverb = new Tone.Reverb({ decay: 1.5, wet: 0.3 }).toDestination();
-guitarPoly.connect(reverb);
-
-// 2. Drum Instruments
-const kickDrum = new Tone.MembraneSynth({
-  pitchDecay: 0.05,
-  octaves: 8,
-  oscillator: { type: "sine" }
-}).toDestination();
-
-const snareDrum = new Tone.NoiseSynth({
-  noise: { type: 'white' },
-  envelope: { attack: 0.001, decay: 0.15, release: 0.1 }
-}).toDestination();
-
+let kickDrum, snareDrum, hiHatCymbal, synthSFX;
+let masterCompressor, saturation;
 let isPlaying = false;
-let currentChord = "C";
-let lastStrumY = null;
-let lastDrumTriggerTime = 0;
 
-// Acoustic Chord Frequencies
-const CHORDS = {
-  "C": ["C3", "E3", "G3", "C4", "E4"],
-  "G": ["G2", "B2", "D3", "G3", "D4", "G4"],
-  "Am": ["A2", "E3", "A3", "C4", "E4"],
-  "F": ["F2", "A2", "C3", "F3", "A3", "F4"],
-  "D": ["D3", "A3", "D4", "F#4"]
-};
+let lastTriggerTimeLeft = 0;
+let lastTriggerTimeRight = 0;
+let lastYLeft = null;
+let lastYRight = null;
 
-const chordNames = ["C", "G", "Am", "F", "D"];
+function initAudio() {
+  // 1. Master Output Processing (Boost Volume + Punch)
+  // Master Compressor to squeeze out maximum punch and volume without clipping
+  masterCompressor = new Tone.Compressor({
+    threshold: -12,
+    ratio: 6,
+    attack: 0.003,
+    release: 0.1
+  }).toDestination();
+
+  // Subtle distortion/saturation to make sounds thick and heavy
+  saturation = new Tone.Distortion(0.15).connect(masterCompressor);
+
+  // Master Volume Gain Boost (+6dB)
+  Tone.Destination.volume.value = 6;
+
+  // 2. Heavy Kick Drum (Low sub-bass drop + high initial slap)
+  kickDrum = new Tone.MembraneSynth({
+    pitchDecay: 0.08,
+    octaves: 10,
+    oscillator: { type: "sine" },
+    envelope: { attack: 0.001, decay: 0.4, sustain: 0.01, release: 0.4 }
+  }).connect(saturation);
+
+  // 3. Punchy Snare Drum (Thick noise burst + body tone)
+  snareDrum = new Tone.NoiseSynth({
+    noise: { type: 'pink' },
+    envelope: { attack: 0.001, decay: 0.2, release: 0.1 }
+  }).connect(saturation);
+
+  // 4. Loud Cymbal / Crash
+  hiHatCymbal = new Tone.MetalSynth({
+    frequency: 350,
+    envelope: { attack: 0.001, decay: 0.25, release: 0.1 },
+    harmonicity: 5.1,
+    modulationIndex: 40,
+    resonance: 3000,
+    octaves: 2
+  }).connect(masterCompressor);
+
+  // 5. Heavy Electro Synth Hit
+  synthSFX = new Tone.Synth({
+    oscillator: { type: "square" },
+    envelope: { attack: 0.001, decay: 0.2, sustain: 0, release: 0.1 }
+  }).connect(saturation);
+}
+
+function triggerPadSound(padIndex) {
+  switch (padIndex) {
+    case 0: // Top-Left: Heavy Snare
+      snareDrum.triggerAttackRelease("8n");
+      statusText.innerText = "Hit: HEAVY SNARE";
+      break;
+    case 1: // Bottom-Left: Sub Kick
+      kickDrum.triggerAttackRelease("C0", "8n");
+      statusText.innerText = "Hit: SUB KICK BASS";
+      break;
+    case 2: // Top-Right: Loud Cymbal
+      hiHatCymbal.triggerAttackRelease("8n");
+      statusText.innerText = "Hit: CRASH CYMBAL";
+      break;
+    case 3: // Bottom-Right: Heavy Synth
+      synthSFX.triggerAttackRelease("C3", "16n");
+      statusText.innerText = "Hit: HEAVY SYNTH";
+      break;
+  }
+}
 
 function onResults(results) {
   if (videoElement.videoWidth && videoElement.videoHeight) {
@@ -49,119 +87,117 @@ function onResults(results) {
     canvasElement.height = videoElement.videoHeight;
   }
   
-  canvasCtx.save();
-  canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
+  const w = canvasElement.width;
+  const h = canvasElement.height;
 
-  // Top 25% = Drum Zone Line
-  const drumZoneY = canvasElement.height * 0.25;
-  canvasCtx.strokeStyle = "rgba(236, 72, 153, 0.5)";
-  canvasCtx.setLineDash([6, 6]);
-  canvasCtx.lineWidth = 2;
+  canvasCtx.save();
+  canvasCtx.clearRect(0, 0, w, h);
+
+  // Visual Grid
+  canvasCtx.lineWidth = 3;
+
+  canvasCtx.fillStyle = "rgba(239, 68, 68, 0.25)";
+  canvasCtx.fillRect(0, 0, w / 2, h / 2);
+
+  canvasCtx.fillStyle = "rgba(59, 130, 246, 0.25)";
+  canvasCtx.fillRect(0, h / 2, w / 2, h / 2);
+
+  canvasCtx.fillStyle = "rgba(234, 179, 8, 0.25)";
+  canvasCtx.fillRect(w / 2, 0, w / 2, h / 2);
+
+  canvasCtx.fillStyle = "rgba(168, 85, 247, 0.25)";
+  canvasCtx.fillRect(w / 2, h / 2, w / 2, h / 2);
+
+  canvasCtx.strokeStyle = "rgba(255, 255, 255, 0.4)";
+  canvasCtx.setLineDash([8, 8]);
   canvasCtx.beginPath();
-  canvasCtx.moveTo(0, drumZoneY);
-  canvasCtx.lineTo(canvasElement.width, drumZoneY);
+  canvasCtx.moveTo(w / 2, 0); canvasCtx.lineTo(w / 2, h);
+  canvasCtx.moveTo(0, h / 2); canvasCtx.lineTo(w, h / 2);
   canvasCtx.stroke();
 
-  canvasCtx.fillStyle = "rgba(236, 72, 153, 0.9)";
-  canvasCtx.font = "bold 16px sans-serif";
-  canvasCtx.fillText("🥁 DRUM ZONE (Top Area)", 20, 25);
+  canvasCtx.fillStyle = "#ffffff";
+  canvasCtx.font = "bold 18px sans-serif";
+  canvasCtx.fillText("🥁 HEAVY SNARE", 20, 40);
+  canvasCtx.fillText("💥 SUB KICK", 20, h / 2 + 40);
+  canvasCtx.fillText("🔔 CRASH CYMBAL", w / 2 + 20, 40);
+  canvasCtx.fillText("⚡ HEAVY SYNTH", w / 2 + 20, h / 2 + 40);
 
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
-    let leftHand = null;
-    let rightHand = null;
+    const now = Date.now();
 
-    // Fixed hand orientation for selfie mirror mode
-    results.multiHandedness.forEach((handedness, index) => {
-      if (handedness.label === "Left") {
-        leftHand = results.multiHandLandmarks[index];  // Controls Chord
-      } else {
-        rightHand = results.multiHandLandmarks[index]; // Controls Strumming & Drums
-      }
-    });
+    results.multiHandLandmarks.forEach((hand, handIdx) => {
+      const fingerTips = [8, 12, 16];
+      let avgX = 0;
+      let avgY = 0;
 
-    if (!leftHand && !rightHand && results.multiHandLandmarks.length > 0) {
-      leftHand = results.multiHandLandmarks[0];
-      if (results.multiHandLandmarks.length > 1) {
-        rightHand = results.multiHandLandmarks[1];
-      }
-    }
+      fingerTips.forEach((idx) => {
+        const pt = hand[idx];
+        avgX += (1 - pt.x);
+        avgY += pt.y;
 
-    // 1. Left Hand - Select Acoustic Chord
-    if (leftHand) {
-      const indexTip = leftHand[8];
-      
-      canvasCtx.fillStyle = '#00FF00';
-      canvasCtx.beginPath();
-      canvasCtx.arc(indexTip.x * canvasElement.width, indexTip.y * canvasElement.height, 16, 0, 2 * Math.PI);
-      canvasCtx.fill();
+        canvasCtx.fillStyle = handIdx === 0 ? "#00FF00" : "#FF0077";
+        canvasCtx.beginPath();
+        canvasCtx.arc((1 - pt.x) * w, pt.y * h, 10, 0, 2 * Math.PI);
+        canvasCtx.fill();
+      });
 
-      const chordIndex = Math.floor(indexTip.y * chordNames.length);
-      currentChord = chordNames[Math.max(0, Math.min(chordNames.length - 1, chordIndex))];
-    }
+      avgX /= fingerTips.length;
+      avgY /= fingerTips.length;
 
-    // 2. Right Hand - Strum Acoustic Strings or Hit Drums
-    if (rightHand) {
-      const indexTip = rightHand[8];
-      const currentY = indexTip.y * canvasElement.height;
-      const now = Date.now();
+      let padIndex = 0;
+      if (avgX < 0.5 && avgY < 0.5) padIndex = 0;
+      else if (avgX < 0.5 && avgY >= 0.5) padIndex = 1;
+      else if (avgX >= 0.5 && avgY < 0.5) padIndex = 2;
+      else if (avgX >= 0.5 && avgY >= 0.5) padIndex = 3;
 
-      const inDrumZone = currentY < drumZoneY;
-      canvasCtx.fillStyle = inDrumZone ? '#EC4899' : '#FF0000';
-      canvasCtx.beginPath();
-      canvasCtx.arc(indexTip.x * canvasElement.width, currentY, 16, 0, 2 * Math.PI);
-      canvasCtx.fill();
+      const lastY = handIdx === 0 ? lastYLeft : lastYRight;
+      const lastTrigger = handIdx === 0 ? lastTriggerTimeLeft : lastTriggerTimeRight;
 
-      if (lastStrumY !== null) {
-        const speed = indexTip.y - lastStrumY;
+      if (lastY !== null) {
+        const speed = avgY - lastY;
 
-        // Top Zone: Drums
-        if (inDrumZone && Math.abs(speed) > 0.05 && (now - lastDrumTriggerTime > 200)) {
-          if (indexTip.x < 0.5) {
-            kickDrum.triggerAttackRelease("C1", "8n");
-            statusText.innerText = "🥁 Drum: KICK!";
-          } else {
-            snareDrum.triggerAttackRelease("16n");
-            statusText.innerText = "🥁 Drum: SNARE!";
-          }
-          lastDrumTriggerTime = now;
-        } 
-        // Lower Area: Acoustic Guitar Strumming
-        else if (!inDrumZone && Math.abs(speed) > 0.05 && isPlaying) {
-          guitarPoly.triggerAttackRelease(CHORDS[currentChord], "2n");
-          statusText.innerText = "🪕 Acoustic Chord: " + currentChord;
+        if (speed > 0.04 && (now - lastTrigger > 180)) {
+          triggerPadSound(padIndex);
+
+          if (handIdx === 0) lastTriggerTimeLeft = now;
+          else lastTriggerTimeRight = now;
         }
       }
-      lastStrumY = indexTip.y;
-    }
-  }
 
-  // Display active acoustic chord on canvas
-  canvasCtx.fillStyle = "#38bdf8";
-  canvasCtx.font = "bold 24px sans-serif";
-  canvasCtx.fillText("Chord: " + currentChord, 20, canvasElement.height - 20);
+      if (handIdx === 0) lastYLeft = avgY;
+      else lastYRight = avgY;
+    });
+  }
 
   canvasCtx.restore();
 }
 
-// MediaPipe setup with fast detection options
-const hands = new Hands({
-  locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
-});
-
-hands.setOptions({
-  maxNumHands: 2,
-  modelComplexity: 0, // Set to 0 for rapid tracking
-  minDetectionConfidence: 0.5,
-  minTrackingConfidence: 0.5
-});
-
-hands.onResults(onResults);
-
 startBtn.addEventListener('click', async () => {
   try {
+    statusText.innerText = "Powering up drum audio...";
+    
+    if (typeof window.Hands === 'undefined') {
+      throw new Error("MediaPipe library failed to load from CDN.");
+    }
+
     await Tone.start();
+    initAudio();
     isPlaying = true;
-    statusText.innerText = "Starting Camera...";
+
+    statusText.innerText = "Starting camera...";
+
+    const hands = new Hands({
+      locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
+    });
+
+    hands.setOptions({
+      maxNumHands: 2,
+      modelComplexity: 0,
+      minDetectionConfidence: 0.5,
+      minTrackingConfidence: 0.5
+    });
+
+    hands.onResults(onResults);
 
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
@@ -182,13 +218,13 @@ startBtn.addEventListener('click', async () => {
       }
     }
 
-    statusText.innerText = "Acoustic Band Active! Strum below line, hit top zone for drums.";
+    statusText.innerText = "Heavy Drums Active! Tap pads to play.";
     startBtn.style.display = 'none';
     
     processFrame();
 
   } catch (err) {
     console.error(err);
-    statusText.innerText = "Camera Access Error. Please allow webcam permissions.";
+    statusText.innerText = "Error: " + err.message;
   }
 });
