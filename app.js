@@ -4,15 +4,23 @@ const canvasCtx = canvasElement.getContext('2d');
 const startBtn = document.getElementById('start-btn');
 const statusText = document.getElementById('status');
 
-// Tone.js Audio Synth setup
-const synth = new Tone.PolySynth(Tone.Synth, {
+// 1. Guitar Audio Synth
+const guitarSynth = new Tone.PolySynth(Tone.Synth, {
   oscillator: { type: "triangle" },
   envelope: { attack: 0.02, decay: 0.1, sustain: 0.3, release: 0.8 }
+}).toDestination();
+
+// 2. Drum Audio Instruments
+const kickDrum = new Tone.MembraneSynth().toDestination();
+const snareDrum = new Tone.NoiseSynth({
+  noise: { type: 'white' },
+  envelope: { attack: 0.005, decay: 0.1, release: 0.1 }
 }).toDestination();
 
 let isPlaying = false;
 let currentChord = "C";
 let lastStrumY = null;
+let lastDrumTriggerTime = 0;
 
 const CHORDS = {
   "C": ["C3", "E3", "G3", "C4", "E4"],
@@ -25,7 +33,6 @@ const CHORDS = {
 const chordNames = ["C", "G", "Am", "F", "D"];
 
 function onResults(results) {
-  // Sync canvas size to video size dynamically
   if (videoElement.videoWidth && videoElement.videoHeight) {
     canvasElement.width = videoElement.videoWidth;
     canvasElement.height = videoElement.videoHeight;
@@ -34,15 +41,30 @@ function onResults(results) {
   canvasCtx.save();
   canvasCtx.clearRect(0, 0, canvasElement.width, canvasElement.height);
 
+  // Draw Drum Zone Divider Line (Top 25% of screen = Drum Zone)
+  const drumZoneY = canvasElement.height * 0.25;
+  canvasCtx.strokeStyle = "rgba(236, 72, 153, 0.5)";
+  canvasCtx.setLineDash([6, 6]);
+  canvasCtx.lineWidth = 2;
+  canvasCtx.beginPath();
+  canvasCtx.moveTo(0, drumZoneY);
+  canvasCtx.lineTo(canvasElement.width, drumZoneY);
+  canvasCtx.stroke();
+
+  canvasCtx.fillStyle = "rgba(236, 72, 153, 0.8)";
+  canvasCtx.font = "bold 16px sans-serif";
+  canvasCtx.fillText("🥁 DRUM ZONE (Top Area)", 20, 25);
+
   if (results.multiHandLandmarks && results.multiHandLandmarks.length > 0) {
     let leftHand = null;
     let rightHand = null;
 
+    // Fixed hand orientation for mirror mode
     results.multiHandedness.forEach((handedness, index) => {
       if (handedness.label === "Left") {
-        rightHand = results.multiHandLandmarks[index];
+        leftHand = results.multiHandLandmarks[index];  // Controls Chords
       } else {
-        leftHand = results.multiHandLandmarks[index];
+        rightHand = results.multiHandLandmarks[index]; // Controls Strumming & Drums
       }
     });
 
@@ -53,7 +75,7 @@ function onResults(results) {
       }
     }
 
-    // 1. Left Hand - Select Chord
+    // 1. Left Hand - Select Guitar Chord
     if (leftHand) {
       const indexTip = leftHand[8];
       
@@ -66,36 +88,51 @@ function onResults(results) {
       currentChord = chordNames[Math.max(0, Math.min(chordNames.length - 1, chordIndex))];
     }
 
-    // 2. Right Hand - Strum
+    // 2. Right Hand - Guitar Strum & Drum Hits
     if (rightHand) {
       const indexTip = rightHand[8];
+      const currentY = indexTip.y * canvasElement.height;
+      const now = Date.now();
 
-      canvasCtx.fillStyle = '#FF0000';
+      // Draw tracking dot
+      const inDrumZone = currentY < drumZoneY;
+      canvasCtx.fillStyle = inDrumZone ? '#EC4899' : '#FF0000';
       canvasCtx.beginPath();
-      canvasCtx.arc(indexTip.x * canvasElement.width, indexTip.y * canvasElement.height, 16, 0, 2 * Math.PI);
+      canvasCtx.arc(indexTip.x * canvasElement.width, currentY, 16, 0, 2 * Math.PI);
       canvasCtx.fill();
 
       if (lastStrumY !== null) {
         const speed = indexTip.y - lastStrumY;
-        
-        if (Math.abs(speed) > 0.05 && isPlaying) {
-          synth.triggerAttackRelease(CHORDS[currentChord], "2n");
-          statusText.innerText = "Playing: " + currentChord;
+
+        // Check if Right Hand is in Drum Zone (Top 25%)
+        if (inDrumZone && Math.abs(speed) > 0.05 && (now - lastDrumTriggerTime > 200)) {
+          if (indexTip.x < 0.5) {
+            kickDrum.triggerAttackRelease("C1", "8n");
+            statusText.innerText = "🥁 Drum: KICK!";
+          } else {
+            snareDrum.triggerAttackRelease("16n");
+            statusText.innerText = "🥁 Drum: SNARE!";
+          }
+          lastDrumTriggerTime = now;
+        } 
+        // Otherwise, trigger Guitar Strum
+        else if (!inDrumZone && Math.abs(speed) > 0.05 && isPlaying) {
+          guitarSynth.triggerAttackRelease(CHORDS[currentChord], "2n");
+          statusText.innerText = "🎸 Guitar Chord: " + currentChord;
         }
       }
       lastStrumY = indexTip.y;
     }
   }
 
-  // Draw Chord visual indicator
+  // Draw Guitar Chord Status
   canvasCtx.fillStyle = "#38bdf8";
-  canvasCtx.font = "bold 26px sans-serif";
-  canvasCtx.fillText("Chord: " + currentChord, 20, 40);
+  canvasCtx.font = "bold 24px sans-serif";
+  canvasCtx.fillText("Chord: " + currentChord, 20, canvasElement.height - 20);
 
   canvasCtx.restore();
 }
 
-// MediaPipe setup using stable CDN assets
 const hands = new Hands({
   locateFile: (file) => `https://cdn.jsdelivr.net/npm/@mediapipe/hands/${file}`
 });
@@ -115,7 +152,6 @@ startBtn.addEventListener('click', async () => {
     isPlaying = true;
     statusText.innerText = "Starting Camera...";
 
-    // 1. Get raw video stream directly from device
     const stream = await navigator.mediaDevices.getUserMedia({
       video: {
         facingMode: "user",
@@ -128,7 +164,6 @@ startBtn.addEventListener('click', async () => {
     videoElement.srcObject = stream;
     await videoElement.play();
 
-    // 2. Process video frames into MediaPipe continuously
     async function processFrame() {
       if (isPlaying) {
         await hands.send({ image: videoElement });
@@ -136,10 +171,9 @@ startBtn.addEventListener('click', async () => {
       }
     }
 
-    statusText.innerText = "Guitar Active! Move hand for chord, strum to play.";
+    statusText.innerText = "Band Active! Strum in middle, hit top zone for drums!";
     startBtn.style.display = 'none';
     
-    // Start processing frame loop
     processFrame();
 
   } catch (err) {
